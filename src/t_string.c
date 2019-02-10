@@ -80,12 +80,12 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
     if ((flags & OBJ_SET_NX && lookupKeyWrite(c->db,key) != NULL) ||
         (flags & OBJ_SET_XX && lookupKeyWrite(c->db,key) == NULL))
     {
-        addReply(c, abort_reply ? abort_reply : shared.nullbulk);
+        addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         return;
     }
     setKey(c->db,key,val);
     server.dirty++;
-    if (expire) setExpire(c->db,key,mstime()+milliseconds);
+    if (expire) setExpire(c,c->db,key,mstime()+milliseconds);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
     if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC,
         "expire",key,c->db->id);
@@ -157,7 +157,7 @@ void psetexCommand(client *c) {
 int getGenericCommand(client *c) {
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL)
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
         return C_OK;
 
     if (o->type != OBJ_STRING) {
@@ -285,14 +285,14 @@ void getrangeCommand(client *c) {
 void mgetCommand(client *c) {
     int j;
 
-    addReplyMultiBulkLen(c,c->argc-1);
+    addReplyArrayLen(c,c->argc-1);
     for (j = 1; j < c->argc; j++) {
         robj *o = lookupKeyRead(c->db,c->argv[j]);
         if (o == NULL) {
-            addReply(c,shared.nullbulk);
+            addReplyNull(c);
         } else {
             if (o->type != OBJ_STRING) {
-                addReply(c,shared.nullbulk);
+                addReplyNull(c);
             } else {
                 addReplyBulk(c,o);
             }
@@ -301,23 +301,21 @@ void mgetCommand(client *c) {
 }
 
 void msetGenericCommand(client *c, int nx) {
-    int j, busykeys = 0;
+    int j;
 
     if ((c->argc % 2) == 0) {
         addReplyError(c,"wrong number of arguments for MSET");
         return;
     }
+
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
-     * set nothing at all if at least one already key exists. */
+     * set anything if at least one key alerady exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
             if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {
-                busykeys++;
+                addReply(c, shared.czero);
+                return;
             }
-        }
-        if (busykeys) {
-            addReply(c, shared.czero);
-            return;
         }
     }
 
@@ -361,7 +359,7 @@ void incrDecrCommand(client *c, long long incr) {
         new = o;
         o->ptr = (void*)((long)value);
     } else {
-        new = createStringObjectFromLongLong(value);
+        new = createStringObjectFromLongLongForValue(value);
         if (o) {
             dbOverwrite(c->db,c->argv[1],new);
         } else {
